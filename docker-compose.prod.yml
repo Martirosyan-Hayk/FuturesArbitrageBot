@@ -1,0 +1,54 @@
+version: '3.8'
+
+# Production deployment configuration
+# Use: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+services:
+  # Futures Arbitrage Bot - Production
+  app:
+    container_name: arbitrage-bot-prod
+    restart: always
+    environment:
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    ports:
+      - "3000:3000"  # Only expose necessary ports
+
+  # Redis - Production
+  redis:
+    container_name: arbitrage-redis-prod
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Don't expose Redis port in production for security
+    ports: [] 
