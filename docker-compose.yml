@@ -4,10 +4,10 @@ services:
   # Redis service for Bull queues
   redis:
     image: redis:7-alpine
-    container_name: arbitrage-redis
+    container_name: arbitrage-redis-dev
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Expose for local development tools (avoiding port conflict)
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -19,19 +19,20 @@ services:
     networks:
       - arbitrage-network
 
-  # Futures Arbitrage Bot
+  # Futures Arbitrage Bot - Local Development
   app:
     build:
       context: .
       dockerfile: Dockerfile
-      target: production
-    container_name: arbitrage-bot
+      target: builder  # Use builder stage for development
+    container_name: arbitrage-bot-dev
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "30001:3000"
+      - "9229:9229"  # Debug port for development
     environment:
       # Application
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
       
       # Redis Configuration
@@ -39,9 +40,9 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ""
       
-      # Telegram Bot (customize these)
+      # Telegram Bot Configuration
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-your_telegram_bot_token_here}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:--123456789}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-your_chat_id_here}
       
       # Exchange API Keys (optional for public endpoints)
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
@@ -57,18 +58,41 @@ services:
       
       # Arbitrage Configuration
       ARBITRAGE_THRESHOLD_PERCENT: ${ARBITRAGE_THRESHOLD_PERCENT:-0.7}
+      ARBITRAGE_CLOSE_THRESHOLD_PERCENT: ${ARBITRAGE_CLOSE_THRESHOLD_PERCENT:-0.5}
       COOLDOWN_MINUTES: ${COOLDOWN_MINUTES:-5}
       MIN_PROFIT_USD: ${MIN_PROFIT_USD:-10}
+      SEND_CLOSED_ALERTS: ${SEND_CLOSED_ALERTS:-true}
+      MIN_OPPORTUNITY_DURATION_FOR_CLOSE_ALERT: ${MIN_OPPORTUNITY_DURATION_FOR_CLOSE_ALERT:-2}
       
       # Trading Pairs
-      TRADING_PAIRS: ${TRADING_PAIRS:-BTC/USDT,ETH/USDT,BNB/USDT}
+      TRADING_PAIRS: ${TRADING_PAIRS:-BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT}
       
       # New Listings Configuration
       NEW_LISTING_CHECK_INTERVAL: ${NEW_LISTING_CHECK_INTERVAL:-30}
       NEW_LISTING_THRESHOLD_HOURS: ${NEW_LISTING_THRESHOLD_HOURS:-24}
       
+      # System Configuration
+      MAX_PRICE_HISTORY: ${MAX_PRICE_HISTORY:-100}
+      STALE_PRICE_THRESHOLD: ${STALE_PRICE_THRESHOLD:-60}
+      CLEANUP_INTERVAL_MINUTES: ${CLEANUP_INTERVAL_MINUTES:-5}
+      
+      # Exchange Failure Settings (NEW)
+      ENABLE_EXCHANGE_FALLBACKS: ${ENABLE_EXCHANGE_FALLBACKS:-false}
+      FALLBACK_SYMBOLS: ${FALLBACK_SYMBOLS:-BTC/USDT,ETH/USDT,SOL/USDT}
+      NOTIFY_EXCHANGE_FAILURES: ${NOTIFY_EXCHANGE_FAILURES:-true}
+      EXCHANGE_FAILURE_COOLDOWN_MINUTES: ${EXCHANGE_FAILURE_COOLDOWN_MINUTES:-30}
+      
+      # WebSocket Settings (NEW - Zero Latency)
+      WEBSOCKET_RECONNECT_INTERVAL: ${WEBSOCKET_RECONNECT_INTERVAL:-5000}
+      WEBSOCKET_PING_INTERVAL: ${WEBSOCKET_PING_INTERVAL:-30000}
+      WEBSOCKET_TIMEOUT: ${WEBSOCKET_TIMEOUT:-10000}
+      
     volumes:
+      # Mount source code for hot reloading in development
+      - .:/app
+      - /app/node_modules  # Prevent overwriting node_modules
       - app_logs:/app/logs
+    command: ["yarn", "start:dev"]  # Use development start command
     depends_on:
       redis:
         condition: service_healthy

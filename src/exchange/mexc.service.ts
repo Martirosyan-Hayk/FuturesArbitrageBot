@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as WebSocket from 'ws';
 import { PriceData, SupportedExchanges, ExchangeSymbol } from '@/common/types';
+import { TelegramService } from '@/telegram/telegram.service';
 
 @Injectable()
 export class MexcService {
@@ -10,9 +11,30 @@ export class MexcService {
     private readonly apiUrl = 'https://contract.mexc.com/api/v1';
     private readonly connections = new Map<string, WebSocket>();
     private readonly subscriptions = new Map<string, (data: PriceData) => void>();
+    private readonly failureNotifications = new Map<string, number>();
     private isInitialized = false;
 
-    constructor(private readonly configService: ConfigService) { }
+    // Configuration
+    private readonly enableFallbacks: boolean;
+    private readonly fallbackSymbols: string[];
+    private readonly notifyFailures: boolean;
+    private readonly failureCooldownMs: number;
+    private readonly reconnectInterval: number;
+    private readonly pingInterval: number;
+    private readonly wsTimeout: number;
+
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly telegramService: TelegramService
+    ) {
+        this.enableFallbacks = this.configService.get<string>('ENABLE_EXCHANGE_FALLBACKS', 'false') === 'true';
+        this.fallbackSymbols = this.configService.get<string>('FALLBACK_SYMBOLS', 'BTC/USDT,ETH/USDT').split(',').map(s => s.trim());
+        this.notifyFailures = this.configService.get<string>('NOTIFY_EXCHANGE_FAILURES', 'true') === 'true';
+        this.failureCooldownMs = parseInt(this.configService.get<string>('EXCHANGE_FAILURE_COOLDOWN_MINUTES', '30')) * 60 * 1000;
+        this.reconnectInterval = parseInt(this.configService.get<string>('WEBSOCKET_RECONNECT_INTERVAL', '5000'));
+        this.pingInterval = parseInt(this.configService.get<string>('WEBSOCKET_PING_INTERVAL', '30000'));
+        this.wsTimeout = parseInt(this.configService.get<string>('WEBSOCKET_TIMEOUT', '10000'));
+    }
 
     async initialize(): Promise<void> {
         this.logger.log('🔄 Initializing MEXC service...');
@@ -97,7 +119,7 @@ export class MexcService {
                 // Attempt to reconnect after a delay
                 setTimeout(() => {
                     this.reconnectTicker(symbol, callback);
-                }, 10000); // Increased delay for MEXC
+                }, this.reconnectInterval);
             });
 
         } catch (error) {
@@ -108,16 +130,65 @@ export class MexcService {
 
     async getSymbols(): Promise<ExchangeSymbol[]> {
         try {
-            const response = await fetch(`${this.apiUrl}/contract/detail`);
+            // Try multiple MEXC endpoints
+            const endpoints = [
+                `${this.apiUrl}/contract/detail`,
+                `https://contract.mexc.com/api/v1/contract/detail`,
+                `https://www.mexc.com/api/v1/contract/detail`
+            ];
 
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            let data = null;
+            let lastError = null;
+
+            for (const endpoint of endpoints) {
+                try {
+                    this.logger.log(`🔄 Trying MEXC symbols endpoint: ${endpoint}`);
+
+                    // Set up timeout using AbortController
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), this.wsTimeout);
+
+                    const response = await fetch(endpoint, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'Mozilla/5.0 (compatible; FuturesArbitrageBot/1.0)'
+                        },
+                        signal: controller.signal
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const text = await response.text();
+
+                    // Check if response is HTML (error page)
+                    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+                        throw new Error('API returned HTML instead of JSON (likely blocked or rate limited)');
+                    }
+
+                    data = JSON.parse(text);
+
+                    if (data.code !== 200) {
+                        throw new Error(`MEXC API error: ${data.msg || 'Unknown error'}`);
+                    }
+
+                    this.logger.log(`✅ MEXC symbols fetched successfully from: ${endpoint}`);
+                    break; // Success, exit loop
+
+                } catch (error) {
+                    lastError = error;
+                    this.logger.warn(`⚠️ MEXC endpoint failed: ${endpoint} - ${error.message}`);
+                    continue; // Try next endpoint
+                }
             }
 
-            const data = await response.json();
-
-            if (data.code !== 200) {
-                throw new Error(`MEXC API error: ${data.msg || 'Unknown error'}`);
+            if (!data) {
+                throw new Error(`All MEXC endpoints failed. Last error: ${lastError?.message || 'Unknown error'}`);
             }
 
             return data.data
@@ -132,8 +203,33 @@ export class MexcService {
                     tickSize: parseFloat(symbol.priceScale || '0'),
                     lastUpdated: Date.now(),
                 }));
+
         } catch (error) {
             this.logger.error(`❌ Failed to fetch MEXC symbols: ${error.message}`);
+
+            // Send failure notification if enabled
+            await this.notifyFailure('Symbol Fetch Failed', error.message);
+
+            // Return fallback symbols only if enabled
+            if (this.enableFallbacks) {
+                this.logger.warn(`⚠️ Using fallback symbols for MEXC: ${this.fallbackSymbols.join(', ')}`);
+
+                return this.fallbackSymbols.map(symbol => {
+                    const [baseAsset, quoteAsset] = symbol.split('/');
+                    return {
+                        symbol,
+                        baseAsset,
+                        quoteAsset,
+                        status: 'TRADING',
+                        exchange: SupportedExchanges.MEXC,
+                        minTradeAmount: 0,
+                        tickSize: 0,
+                        lastUpdated: Date.now(),
+                    };
+                });
+            }
+
+            // No fallbacks - return empty array to force notification
             return [];
         }
     }
@@ -153,7 +249,7 @@ export class MexcService {
             // Retry after a longer delay
             setTimeout(() => {
                 this.reconnectTicker(symbol, callback);
-            }, 60000); // 1 minute delay for MEXC
+            }, this.reconnectInterval * 6); // 6x the normal interval for retries
         }
     }
 
@@ -190,5 +286,30 @@ export class MexcService {
 
     getConnectedSymbols(): string[] {
         return Array.from(this.connections.keys());
+    }
+
+    private async notifyFailure(type: string, message: string): Promise<void> {
+        if (!this.notifyFailures) return;
+
+        const notificationKey = `${type}-${message}`;
+        const now = Date.now();
+        const lastNotification = this.failureNotifications.get(notificationKey);
+
+        // Check cooldown period
+        if (lastNotification && now - lastNotification < this.failureCooldownMs) {
+            return; // Still in cooldown
+        }
+
+        this.failureNotifications.set(notificationKey, now);
+
+        // Log the failure
+        this.logger.error(`🚨 MEXC FAILURE NOTIFICATION: ${type} - ${message}`);
+
+        // Send Telegram notification
+        try {
+            await this.telegramService.sendSystemAlert(`🚨 **MEXC Exchange Failure**\n\n**Type:** ${type}\n**Details:** ${message}\n\n⚠️ Please check MEXC API status and fix if needed.`);
+        } catch (telegramError) {
+            this.logger.error(`❌ Failed to send Telegram notification: ${telegramError.message}`);
+        }
     }
 } 

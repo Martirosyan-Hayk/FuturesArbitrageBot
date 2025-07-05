@@ -5,10 +5,13 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package.json yarn.lock ./
+ADD /package.json ./package.json
+ADD /.yarnrc.yml ./.yarnrc.yml
+ADD /.yarn ./.yarn
+ADD /yarn.lock ./yarn.lock
 
 # Install dependencies
-RUN yarn install --frozen-lockfile
+RUN yarn install --immutable
 
 # Copy source code
 COPY . .
@@ -27,10 +30,13 @@ RUN adduser -S nestjs -u 1001
 WORKDIR /app
 
 # Copy package files
-COPY package.json yarn.lock ./
+ADD /package.json ./package.json
+ADD /.yarnrc.yml ./.yarnrc.yml
+ADD /.yarn ./.yarn
+ADD /yarn.lock ./yarn.lock
 
 # Install only production dependencies
-RUN yarn install --frozen-lockfile --production && yarn cache clean
+RUN yarn install  --immutable --production && yarn cache clean
 
 # Copy built application from builder stage
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist

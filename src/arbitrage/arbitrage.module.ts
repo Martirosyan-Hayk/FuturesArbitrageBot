@@ -5,9 +5,11 @@ import { ArbitrageController } from './arbitrage.controller';
 import { ArbitrageProcessor } from './arbitrage.processor';
 import { PriceModule } from '@/price/price.module';
 import { TelegramModule } from '@/telegram/telegram.module';
+import { ExchangeModule } from '@/exchange/exchange.module';
 
 @Module({
     imports: [
+        ExchangeModule,
         PriceModule,
         TelegramModule,
         BullModule.registerQueue({

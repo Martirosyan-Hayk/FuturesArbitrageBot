@@ -50,6 +50,9 @@ export class ExchangeService implements OnModuleInit, OnModuleDestroy {
 
         // Start WebSocket connections
         await this.startWebSocketConnections();
+
+        // Start periodic health checks
+        this.startHealthChecks();
     }
 
     async onModuleDestroy() {
@@ -167,5 +170,88 @@ export class ExchangeService implements OnModuleInit, OnModuleDestroy {
             this.logger.error(`❌ Failed to reconnect to ${exchangeName}: ${error.message}`);
             throw error;
         }
+    }
+
+    private startHealthChecks() {
+        // Check exchange health every 5 minutes
+        setInterval(() => {
+            this.performHealthCheck();
+        }, 5 * 60 * 1000); // 5 minutes
+
+        // Initial health check after 30 seconds
+        setTimeout(() => {
+            this.performHealthCheck();
+        }, 30 * 1000);
+    }
+
+    private async performHealthCheck() {
+        this.logger.log('🏥 Performing exchange health check...');
+
+        const workingExchanges: string[] = [];
+        const failedExchanges: string[] = [];
+
+        for (const [exchangeName, service] of this.exchangeServices) {
+            try {
+                const isConnected = service.isConnected();
+                const connectionCount = service.getConnectionCount ? service.getConnectionCount() : 0;
+
+                if (isConnected && connectionCount > 0) {
+                    workingExchanges.push(`${exchangeName} (${connectionCount} connections)`);
+                } else {
+                    failedExchanges.push(exchangeName);
+
+                    // Attempt to reconnect failed exchanges
+                    this.logger.warn(`⚠️ ${exchangeName} is not connected, attempting to reconnect...`);
+                    try {
+                        await this.reconnectExchange(exchangeName);
+                        this.logger.log(`✅ ${exchangeName} reconnected successfully`);
+                    } catch (error) {
+                        this.logger.error(`❌ Failed to reconnect ${exchangeName}: ${error.message}`);
+                    }
+                }
+            } catch (error) {
+                failedExchanges.push(exchangeName);
+                this.logger.error(`❌ Health check failed for ${exchangeName}: ${error.message}`);
+            }
+        }
+
+        // Log comprehensive status
+        this.logger.log(`🏥 Health Check Results:`);
+        this.logger.log(`   ✅ Working: ${workingExchanges.length > 0 ? workingExchanges.join(', ') : 'None'}`);
+        this.logger.log(`   ❌ Failed: ${failedExchanges.length > 0 ? failedExchanges.join(', ') : 'None'}`);
+
+        if (workingExchanges.length >= 2) {
+            this.logger.log(`🎯 Arbitrage system operational with ${workingExchanges.length} exchanges`);
+        } else {
+            this.logger.warn(`⚠️ Only ${workingExchanges.length} exchanges working - arbitrage opportunities may be limited`);
+        }
+    }
+
+    /**
+     * Get detailed status of all exchanges
+     */
+    getDetailedStatus(): Record<string, any> {
+        const status: Record<string, any> = {};
+
+        for (const [exchangeName, service] of this.exchangeServices) {
+            try {
+                status[exchangeName] = {
+                    connected: service.isConnected(),
+                    connectionCount: service.getConnectionCount ? service.getConnectionCount() : 0,
+                    connectedSymbols: service.getConnectedSymbols ? service.getConnectedSymbols() : [],
+                    lastUpdate: new Date().toISOString()
+                };
+            } catch (error) {
+                status[exchangeName] = {
+                    connected: false,
+                    connectionCount: 0,
+                    connectedSymbols: [],
+                    error: error.message,
+                    lastUpdate: new Date().toISOString()
+                };
+            }
+        }
+
+        return status;
     }
 } 

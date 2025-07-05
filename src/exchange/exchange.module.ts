@@ -6,9 +6,10 @@ import { MexcService } from './mexc.service';
 import { GateioService } from './gateio.service';
 import { LbankService } from './lbank.service';
 import { PriceModule } from '@/price/price.module';
+import { TelegramModule } from '@/telegram/telegram.module';
 
 @Module({
-    imports: [PriceModule],
+    imports: [PriceModule, TelegramModule],
     providers: [
         ExchangeService,
         BinanceService,
