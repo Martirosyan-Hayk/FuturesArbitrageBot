@@ -64,7 +64,8 @@ services:
       SEND_CLOSED_ALERTS: ${SEND_CLOSED_ALERTS:-true}
       MIN_OPPORTUNITY_DURATION_FOR_CLOSE_ALERT: ${MIN_OPPORTUNITY_DURATION_FOR_CLOSE_ALERT:-2}
       
-      # Trading Pairs
+      # Trading Pairs Configuration
+      MIN_EXCHANGES_FOR_PAIR: ${MIN_EXCHANGES_FOR_PAIR:-2}
       TRADING_PAIRS: ${TRADING_PAIRS:-BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT}
       
       # New Listings Configuration

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, ParseIntPipe, Param } from '@nestjs/common';
 import { ArbitrageService } from './arbitrage.service';
 import { ExchangeService } from '@/exchange/exchange.service';
 import { ArbitrageConfig } from '@/common/types';
@@ -46,6 +46,44 @@ export class ArbitrageController {
             connectionStatus: this.exchangeService.getConnectionStatus(),
             activeExchanges: this.exchangeService.getActiveExchanges(),
             tradingPairs: this.exchangeService.getTradingPairs(),
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    @Get('common-pairs')
+    getCommonPairs() {
+        return {
+            message: 'Common USDT pairs across exchanges',
+            ...this.exchangeService.getCommonPairsInfo(),
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    @Post('refresh-pairs')
+    async refreshPairs() {
+        try {
+            await this.exchangeService.refreshCommonPairs();
+            return {
+                message: 'Trading pairs refreshed successfully',
+                tradingPairs: this.exchangeService.getTradingPairs(),
+                ...this.exchangeService.getCommonPairsInfo(),
+                timestamp: new Date().toISOString()
+            };
+        } catch (error) {
+            return {
+                message: 'Failed to refresh trading pairs',
+                error: error.message,
+                timestamp: new Date().toISOString()
+            };
+        }
+    }
+
+    @Get('symbol-info/:symbol')
+    getSymbolInfo(@Param('symbol') symbol: string) {
+        return {
+            symbol,
+            exchanges: this.exchangeService.getExchangesForSymbol(symbol),
+            isEligible: this.exchangeService.isSymbolEligible(symbol),
             timestamp: new Date().toISOString()
         };
     }

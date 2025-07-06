@@ -427,12 +427,33 @@ curl -X POST http://localhost:3000/listings/force-check
 | `REDIS_PORT` | Redis server port | `6379` |
 | `PORT` | Application port | `3000` |
 
-### Supported Trading Pairs
+### Dynamic Trading Pair Discovery 🆕
 
-- BTC/USDT
-- ETH/USDT
-- BNB/USDT
-- (Add more pairs in TRADING_PAIRS environment variable)
+The bot now **automatically discovers** all USDT pairs that exist on at least 2 exchanges! No more manual configuration needed.
+
+**Key Features:**
+- 🔍 **Auto-Discovery**: Finds all USDT pairs across all supported exchanges
+- 📊 **Cross-Exchange Analysis**: Only includes pairs available on multiple exchanges
+- 🎯 **Configurable Minimum**: Set minimum number of exchanges required per pair
+- 🔄 **Dynamic Updates**: Automatically refreshes pairs and adapts to new listings
+- 📈 **Popularity Sorting**: Prioritizes pairs by number of supporting exchanges
+
+**How it works:**
+1. Scans all supported exchanges for USDT pairs
+2. Filters pairs that exist on at least `MIN_EXCHANGES_FOR_PAIR` exchanges
+3. Sorts by popularity (number of exchanges supporting the pair)
+4. Automatically starts monitoring for arbitrage opportunities
+
+**API Endpoints:**
+- `GET /arbitrage/common-pairs` - View all discovered pairs
+- `POST /arbitrage/refresh-pairs` - Manually refresh pair discovery
+- `GET /arbitrage/symbol-info/:symbol` - Get info about a specific symbol
+
+**Configuration:**
+```env
+MIN_EXCHANGES_FOR_PAIR=2  # Minimum exchanges required (default: 2)
+TRADING_PAIRS=BTC/USDT,ETH/USDT  # Fallback pairs (used if discovery fails)
+```
 
 ---
 

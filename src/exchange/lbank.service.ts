@@ -8,7 +8,7 @@ import { TelegramService } from '@/telegram/telegram.service';
 export class LbankService {
     private readonly logger = new Logger(LbankService.name);
     private readonly baseUrl = 'wss://www.lbkex.net/ws/V2/';
-    private readonly apiUrl = 'https://www.lbank.info/v2';
+    private readonly apiUrl = 'https://api.lbank.info/v2';
     private readonly connections = new Map<string, WebSocket>();
     private readonly subscriptions = new Map<string, (data: PriceData) => void>();
     private readonly failureNotifications = new Map<string, number>();
@@ -124,69 +124,40 @@ export class LbankService {
 
     async getSymbols(): Promise<ExchangeSymbol[]> {
         try {
-            // Try multiple endpoints as LBank may have changed their API
-            const endpoints = [
-                `${this.apiUrl}/currencyPairs.do`,
-                `https://www.lbank.com/v2/currencyPairs.do`, // Alternative endpoint
-                `https://api.lbank.com/v2/currencyPairs.do`  // API subdomain
-            ];
+            const endpoint = `${this.apiUrl}/currencyPairs.do`;
 
-            let data = null;
-            let lastError = null;
+            this.logger.log(`🔄 Trying LBank symbols endpoint: ${endpoint}`);
 
-            for (const endpoint of endpoints) {
-                try {
-                    this.logger.log(`🔄 Trying LBank symbols endpoint: ${endpoint}`);
+            // Set up timeout using AbortController
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.wsTimeout);
 
-                    // Set up timeout using AbortController
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), this.wsTimeout);
+            const response = await fetch(endpoint, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (compatible; FuturesArbitrageBot/1.0)'
+                },
+                signal: controller.signal
+            });
 
-                    const response = await fetch(endpoint, {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'Content-Type': 'application/json',
-                            'User-Agent': 'Mozilla/5.0 (compatible; FuturesArbitrageBot/1.0)'
-                        },
-                        signal: controller.signal
-                    });
+            clearTimeout(timeoutId);
 
-                    clearTimeout(timeoutId);
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                    }
-
-                    const text = await response.text();
-
-                    // Check if response is HTML (error page)
-                    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-                        throw new Error('API returned HTML instead of JSON (likely blocked or rate limited)');
-                    }
-
-                    data = JSON.parse(text);
-
-                    // Check if API response is valid
-                    if (!data.result || !Array.isArray(data.data)) {
-                        throw new Error('Invalid API response format');
-                    }
-
-                    this.logger.log(`✅ LBank symbols fetched successfully from: ${endpoint}`);
-                    break; // Success, exit loop
-
-                } catch (error) {
-                    lastError = error;
-                    this.logger.warn(`⚠️ LBank endpoint failed: ${endpoint} - ${error.message}`);
-                    continue; // Try next endpoint
-                }
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            if (!data) {
-                throw new Error(`All LBank endpoints failed. Last error: ${lastError?.message || 'Unknown error'}`);
+            const responseDataJson = await response.json();
+
+            // Check if API response is valid
+            if (!responseDataJson.result || !Array.isArray(responseDataJson.data)) {
+                throw new Error('Invalid API response format');
             }
 
-            return data.data.map((pair: string) => {
+            this.logger.log(`✅ LBank symbols fetched successfully from: ${endpoint}`);
+
+            return responseDataJson.data.map((pair: string) => {
                 const [baseAsset, quoteAsset] = pair.split('_');
 
                 return {

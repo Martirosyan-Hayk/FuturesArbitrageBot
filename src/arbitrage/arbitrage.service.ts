@@ -5,6 +5,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { PriceService } from '@/price/price.service';
 import { TelegramService } from '@/telegram/telegram.service';
+import { ExchangeService } from '@/exchange/exchange.service';
 import { ArbitrageOpportunity, PriceData, ArbitrageConfig, ActiveArbitrageOpportunity, ArbitrageOpportunityClosed } from '@/common/types';
 
 @Injectable()
@@ -21,13 +22,14 @@ export class ArbitrageService {
         private readonly configService: ConfigService,
         private readonly priceService: PriceService,
         private readonly telegramService: TelegramService,
+        private readonly exchangeService: ExchangeService,
         @InjectQueue('arbitrage') private readonly arbitrageQueue: Queue,
     ) {
         this.config = {
             thresholdPercent: parseFloat(this.configService.get<string>('ARBITRAGE_THRESHOLD_PERCENT', '0.7')),
             closeThresholdPercent: parseFloat(this.configService.get<string>('ARBITRAGE_CLOSE_THRESHOLD_PERCENT', '0.5')),
             cooldownMinutes: parseInt(this.configService.get<string>('COOLDOWN_MINUTES', '5')),
-            tradingPairs: this.configService.get<string>('TRADING_PAIRS', 'BTC/USDT,ETH/USDT').split(',').map(p => p.trim()),
+            tradingPairs: [], // Will be populated dynamically from ExchangeService
             minProfitUsd: parseFloat(this.configService.get<string>('MIN_PROFIT_USD', '10')),
             sendClosedAlerts: this.configService.get<string>('SEND_CLOSED_ALERTS', 'true') === 'true',
             minOpportunityDurationForCloseAlert: parseInt(this.configService.get<string>('MIN_OPPORTUNITY_DURATION_FOR_CLOSE_ALERT', '2')),
@@ -37,7 +39,7 @@ export class ArbitrageService {
         this.logger.log(`   - Open threshold: ${this.config.thresholdPercent}%`);
         this.logger.log(`   - Close threshold: ${this.config.closeThresholdPercent}%`);
         this.logger.log(`   - Cooldown: ${this.config.cooldownMinutes} minutes`);
-        this.logger.log(`   - Trading pairs: ${this.config.tradingPairs.join(', ')}`);
+        this.logger.log(`   - Trading pairs: Dynamic discovery from exchanges`);
         this.logger.log(`   - Min profit: $${this.config.minProfitUsd}`);
         this.logger.log(`   - Send closed alerts: ${this.config.sendClosedAlerts}`);
         this.logger.log(`   - Min duration for close alert: ${this.config.minOpportunityDurationForCloseAlert} minutes`);
@@ -67,7 +69,15 @@ export class ArbitrageService {
     private async findArbitrageOpportunities(): Promise<ArbitrageOpportunity[]> {
         const opportunities: ArbitrageOpportunity[] = [];
 
-        for (const symbol of this.config.tradingPairs) {
+        // Get dynamically discovered trading pairs from exchange service
+        const tradingPairs = this.exchangeService.getTradingPairs();
+
+        if (tradingPairs.length === 0) {
+            this.logger.warn('⚠️ No trading pairs available from exchange service');
+            return opportunities;
+        }
+
+        for (const symbol of tradingPairs) {
             const prices = this.priceService.getAllPricesForSymbol(symbol);
 
             if (prices.length < 2) {
@@ -274,15 +284,25 @@ export class ArbitrageService {
             );
 
             if (!currentOpportunity) {
-                // Prices not available, mark as closed due to data unavailability
-                const closedOpportunity = this.createClosedOpportunity(
-                    activeOpportunity,
-                    null,
-                    null,
-                    'PRICE_CONVERGED',
-                    now
-                );
-                closedOpportunities.push(closedOpportunity);
+                // Prices not available - check if opportunity has been active too long without data
+                const staleDataTimeout = 30 * 60 * 1000; // 30 minutes without price data
+                const timeSinceLastUpdate = now - activeOpportunity.lastUpdatedTimestamp;
+
+                if (timeSinceLastUpdate > staleDataTimeout) {
+                    // Close due to stale data after extended period
+                    const closedOpportunity = this.createClosedOpportunity(
+                        activeOpportunity,
+                        activeOpportunity.priceA, // Use last known prices instead of null
+                        activeOpportunity.priceB,
+                        'TIMEOUT',
+                        now
+                    );
+                    closedOpportunities.push(closedOpportunity);
+                    this.logger.warn(`⚠️ Closing opportunity ${activeOpportunity.symbol} due to stale data (${(timeSinceLastUpdate / 60000).toFixed(1)}m without updates)`);
+                } else {
+                    // Skip this iteration - wait for fresh data
+                    this.logger.debug(`⏳ Waiting for fresh price data for ${activeOpportunity.symbol} (${(timeSinceLastUpdate / 60000).toFixed(1)}m since last update)`);
+                }
                 continue;
             }
 
@@ -385,14 +405,18 @@ export class ArbitrageService {
     ): ArbitrageOpportunityClosed {
         const duration = closeTimestamp - activeOpportunity.openTimestamp;
 
+        // Use closing prices if available, otherwise use last known prices from active opportunity
+        const finalClosePriceA = closePriceA ?? activeOpportunity.priceA ?? 0;
+        const finalClosePriceB = closePriceB ?? activeOpportunity.priceB ?? 0;
+
         // Calculate close values
         let closePriceDifference = 0;
         let closePriceDifferencePercent = 0;
         let closeProfit = 0;
 
-        if (closePriceA !== null && closePriceB !== null) {
-            closePriceDifference = Math.abs(closePriceA - closePriceB);
-            const avgPrice = (closePriceA + closePriceB) / 2;
+        if (finalClosePriceA > 0 && finalClosePriceB > 0) {
+            closePriceDifference = Math.abs(finalClosePriceA - finalClosePriceB);
+            const avgPrice = (finalClosePriceA + finalClosePriceB) / 2;
             closePriceDifferencePercent = (closePriceDifference / avgPrice) * 100;
             closeProfit = closePriceDifference * 1000; // Assuming 1000 units trade size
         }
@@ -412,8 +436,8 @@ export class ArbitrageService {
             openTimestamp: activeOpportunity.openTimestamp,
 
             // Closing details
-            closePriceA: closePriceA || 0,
-            closePriceB: closePriceB || 0,
+            closePriceA: finalClosePriceA,
+            closePriceB: finalClosePriceB,
             closePriceDifference,
             closePriceDifferencePercent,
             closeProfit,

@@ -12,7 +12,7 @@ export class GateioService {
     private readonly subscriptions = new Map<string, (data: PriceData) => void>();
     private isInitialized = false;
 
-    constructor(private readonly configService: ConfigService) { }
+    constructor(private readonly configService: ConfigService) {}
 
     async initialize(): Promise<void> {
         this.logger.log('🔄 Initializing Gate.io service...');

@@ -131,67 +131,41 @@ export class MexcService {
     async getSymbols(): Promise<ExchangeSymbol[]> {
         try {
             // Try multiple MEXC endpoints
-            const endpoints = [
-                `${this.apiUrl}/contract/detail`,
-                `https://contract.mexc.com/api/v1/contract/detail`,
-                `https://www.mexc.com/api/v1/contract/detail`
-            ];
+            const endpoint = `${this.apiUrl}/contract/detail`;
 
-            let data = null;
-            let lastError = null;
+            this.logger.log(`🔄 Trying MEXC symbols endpoint: ${endpoint}`);
 
-            for (const endpoint of endpoints) {
-                try {
-                    this.logger.log(`🔄 Trying MEXC symbols endpoint: ${endpoint}`);
+            // Set up timeout using AbortController
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.wsTimeout);
 
-                    // Set up timeout using AbortController
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), this.wsTimeout);
+            const response = await fetch(endpoint, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (compatible; FuturesArbitrageBot/1.0)'
+                },
+                signal: controller.signal
+            });
 
-                    const response = await fetch(endpoint, {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'Content-Type': 'application/json',
-                            'User-Agent': 'Mozilla/5.0 (compatible; FuturesArbitrageBot/1.0)'
-                        },
-                        signal: controller.signal
-                    });
+            clearTimeout(timeoutId);
 
-                    clearTimeout(timeoutId);
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                    }
-
-                    const text = await response.text();
-
-                    // Check if response is HTML (error page)
-                    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-                        throw new Error('API returned HTML instead of JSON (likely blocked or rate limited)');
-                    }
-
-                    data = JSON.parse(text);
-
-                    if (data.code !== 200) {
-                        throw new Error(`MEXC API error: ${data.msg || 'Unknown error'}`);
-                    }
-
-                    this.logger.log(`✅ MEXC symbols fetched successfully from: ${endpoint}`);
-                    break; // Success, exit loop
-
-                } catch (error) {
-                    lastError = error;
-                    this.logger.warn(`⚠️ MEXC endpoint failed: ${endpoint} - ${error.message}`);
-                    continue; // Try next endpoint
-                }
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            if (!data) {
-                throw new Error(`All MEXC endpoints failed. Last error: ${lastError?.message || 'Unknown error'}`);
+            const responseDataJson = await response.json();
+
+
+            if (!responseDataJson.success) {
+                throw new Error(`MEXC API error: ${responseDataJson.msg || 'Unknown error'}`);
             }
 
-            return data.data
+            this.logger.log(`✅ MEXC symbols fetched successfully from: ${endpoint}`);
+
+
+            return responseDataJson.data
                 .filter((symbol: any) => symbol.state === 1) // Active contracts
                 .map((symbol: any) => ({
                     symbol: `${symbol.baseCoin}/${symbol.quoteCoin}`,
