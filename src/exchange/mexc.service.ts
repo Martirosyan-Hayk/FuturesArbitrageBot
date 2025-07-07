@@ -166,12 +166,12 @@ export class MexcService {
 
 
             return responseDataJson.data
-                .filter((symbol: any) => symbol.state === 1) // Active contracts
+                .filter((symbol: any) => symbol.state === 0) // Active contracts
                 .map((symbol: any) => ({
                     symbol: `${symbol.baseCoin}/${symbol.quoteCoin}`,
                     baseAsset: symbol.baseCoin,
                     quoteAsset: symbol.quoteCoin,
-                    status: symbol.state === 1 ? 'TRADING' : 'INACTIVE',
+                    status: symbol.state === 0 ? 'TRADING' : 'INACTIVE',
                     exchange: SupportedExchanges.MEXC,
                     minTradeAmount: parseFloat(symbol.minOrderSize || '0'),
                     tickSize: parseFloat(symbol.priceScale || '0'),
