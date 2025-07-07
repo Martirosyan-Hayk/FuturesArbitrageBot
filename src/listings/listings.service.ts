@@ -36,7 +36,7 @@ export class ListingsService implements OnModuleInit {
         }, 5000); // Wait for exchange services to initialize first
     }
 
-    @Cron(CronExpression.EVERY_30_MINUTES)
+    @Cron(CronExpression.EVERY_5_MINUTES)
     async checkForNewListings(): Promise<void> {
         if (!this.isInitialized) {
             return;
